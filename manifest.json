@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "never.health",
+  "name": "Health Mode",
+  "version": "2.0.0",
+  "author": "never",
+  "description": "Health-break reminders: master on/silent/off plus per-stream toggles and cadence",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Health.qml"
+  },
+  "barWidget": {
+    "displayName": "Health Mode",
+    "description": "Reminders, cadence and next scheduled health nudge",
+    "category": "Status",
+    "allowMultiple": false
+  }
+}

@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# health-mode — config + engine for the Health Mode bar widget.
+#
+#   health-mode tick              heartbeat: fire any due reminders (timer runs this)
+#   health-mode summary           JSON: mode + per-stream state + next reminder
+#   health-mode set <path> <val>  set a config value (e.g. streams.eye.every 25)
+#   health-mode fire <stream>     force-fire one stream now (panel preview / testing)
+#
+# Config: ~/.config/health/config.json   State: ~/.local/state/health/state.json
+set -euo pipefail
+export PATH="/usr/share/omarchy/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+cfg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/health"
+cfg="$cfg_dir/config.json"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/health"
+state="$state_dir/state.json"
+sound_file=/usr/share/sounds/freedesktop/stereo/message.oga
+
+default_cfg='{"reminders":true,"sound":true,"streams":{"eye":{"enabled":true,"every":20},"move":{"enabled":true,"every":45},"water":{"enabled":true,"every":90},"breath":{"enabled":true,"every":180},"meal":{"enabled":true,"at":"14:00"},"winddown":{"enabled":true,"at":"23:30"}}}'
+stream_order=(eye move water breath meal winddown)
+
+mkdir -p "$cfg_dir" "$state_dir"
+[[ -f $cfg ]] || printf '%s\n' "$default_cfg" > "$cfg"
+[[ -f $state ]] || printf '%s\n' '{"last":{},"firedToday":{}}' > "$state"
+
+# Config merged over defaults, so missing keys never break a caller.
+read_cfg() {
+  jq -n --argjson d "$default_cfg" --slurpfile c "$cfg" '$d * ($c[0] // {})'
+}
+
+mark_last() {
+  local tmp; tmp=$(mktemp)
+  jq --arg s "$1" --argjson v "$2" '.last[$s]=$v' "$state" > "$tmp" && mv "$tmp" "$state"
+}
+mark_today() {
+  local tmp; tmp=$(mktemp)
+  jq --arg s "$1" --arg d "$2" '.firedToday[$s]=$d' "$state" > "$tmp" && mv "$tmp" "$state"
+}
+
+# "H:M" or "HH:MM" -> "HH:MM"; non-zero status if not a valid 24h time.
+normalize_at() {
+  local v=$1 h m
+  [[ $v =~ ^([0-9]{1,2}):([0-9]{1,2})$ ]] || return 1
+  h=${BASH_REMATCH[1]}; m=${BASH_REMATCH[2]}
+  (( 10#$h > 23 || 10#$m > 59 )) && return 1
+  printf '%02d:%02d' "$((10#$h))" "$((10#$m))"
+}
+to_mins() { local h=${1%%:*} m=${1##*:}; printf '%d' "$(( 10#$h * 60 + 10#$m ))"; }
+
+# Best-effort "away" gate (no-op while omarchy stay-awake disables its idle monitor).
+away() {
+  local locked idle
+  locked=$(omarchy-shell lock isLocked 2>/dev/null || echo false)
+  [[ $locked == true ]] && return 0
+  idle=$(omarchy-shell idle status 2>/dev/null || true)
+  [[ -n $idle ]] || return 1
+  printf '%s' "$idle" | jq -e '.idle or .inIdleCycle' >/dev/null 2>&1
+}
+
+fire() {
+  local s=$1 glyph msgs pick head body sound
+  case $s in
+    eye)      glyph=$(printf '\U000F0208')   # nf-md-eye
+              msgs=("Eyes: 20-20-20|Look at something 20 ft away for 20 seconds."
+                    "Eye break|Focus on a distant object for 20 seconds, then blink slowly."
+                    "Rest your eyes|Look far away for 20 seconds — let your focus muscles relax."
+                    "Screen glare|Match monitor brightness to the room; avoid working in the dark."
+                    "Blink|Blink fully a few times to re-wet your eyes.") ;;
+    move)     glyph=$(printf '\U000F070E')   # nf-md-run
+              msgs=("Stand up|Stretch, roll your shoulders, and walk for a minute."
+                    "Posture check|Sit up, drop your shoulders, flex your wrists."
+                    "Move|Take a short walk — even 60 seconds resets your focus."
+                    "Neck + shoulders|Gently roll your neck and shoulders to release stiffness.") ;;
+    water)    glyph=$(printf '\U000F058C')   # nf-md-water
+              msgs=("Hydrate|Drink some water."
+                    "Water break|Time for a glass of water — keep one at your desk."
+                    "Sip|Take a few sips of water to stay sharp.") ;;
+    breath)   glyph=$(printf '\U000F1084')   # nf-md-lungs
+              msgs=("Breathe|Box breathing: in 4s, hold 4s, out 4s, hold 4s. One minute."
+                    "Reset|Pause and take five slow breaths — drop your shoulders."
+                    "Stress reset|One minute of slow breathing to clear your head.") ;;
+    meal)     glyph=$(printf '\U000F0A70')   # nf-md-silverware-fork-knife
+              msgs=("Lunch break|Eat away from the desk — a real screen break for eyes and posture."
+                    "Meal time|Step away and eat — screen-free if you can.") ;;
+    winddown) glyph=$(printf '\U000F0594')   # nf-md-weather-night
+              msgs=("Wind down|Step away from the screen — dim the room and start your sleep runway."
+                    "Screens off soon|Wrapping up? Give your eyes and brain a break before bed."
+                    "Sleep prep|Dim the lights and stop scrolling — protect tomorrow's focus.") ;;
+    *) return 0 ;;
+  esac
+
+  pick="${msgs[$((RANDOM % ${#msgs[@]}))]}"
+  head="${pick%%|*}"
+  body="${pick#*|}"
+  sound=$(read_cfg | jq -r '.sound')
+  [[ $sound == true ]] && { paplay "$sound_file" >/dev/null 2>&1 || true; }
+  omarchy-notification-send -g "$glyph" -u low "$head" "$body"
+}
+
+cmd_tick() {
+  local cfgj; cfgj=$(read_cfg)
+  [[ $(jq -r '.reminders' <<<"$cfgj") == true ]] || exit 0
+
+  local now today nowmins away_now=0
+  now=$(date +%s); today=$(date +%F); nowmins=$(( 10#$(date +%H) * 60 + 10#$(date +%M) ))
+  away && away_now=1 || true
+
+  local s en every atraw at atMins fired last
+  for s in "${stream_order[@]}"; do
+    en=$(jq -r --arg s "$s" '.streams[$s].enabled // false' <<<"$cfgj")
+    [[ $en == true ]] || continue
+    every=$(jq -r --arg s "$s" '.streams[$s].every // 0' <<<"$cfgj")
+    atraw=$(jq -r --arg s "$s" '.streams[$s].at // ""' <<<"$cfgj")
+
+    if [[ -n $atraw ]]; then
+      at=$(normalize_at "$atraw") || continue
+      atMins=$(to_mins "$at")
+      fired=$(jq -r --arg s "$s" '.firedToday[$s] // ""' "$state")
+      if (( nowmins >= atMins )) && [[ $fired != "$today" ]]; then
+        [[ $away_now == 1 ]] || fire "$s"
+        mark_today "$s" "$today"
+      fi
+    elif (( every > 0 )); then
+      last=$(jq -r --arg s "$s" '.last[$s] // 0' "$state")
+      if (( now - last >= every * 60 )) && [[ $away_now == 0 ]]; then
+        fire "$s"
+        mark_last "$s" "$now"
+      fi
+    fi
+  done
+}
+
+cmd_summary() {
+  local cfgj mode now best_stream="" best_secs=2147483647
+  cfgj=$(read_cfg)
+  now=$(date +%s)
+  if [[ $(jq -r '.reminders' <<<"$cfgj") != true ]]; then mode=off
+  elif [[ $(jq -r '.sound' <<<"$cfgj") != true ]]; then mode=silent
+  else mode=on; fi
+
+  local s en every atraw at last target secs
+  for s in "${stream_order[@]}"; do
+    en=$(jq -r --arg s "$s" '.streams[$s].enabled // false' <<<"$cfgj")
+    [[ $en == true ]] || continue
+    every=$(jq -r --arg s "$s" '.streams[$s].every // 0' <<<"$cfgj")
+    atraw=$(jq -r --arg s "$s" '.streams[$s].at // ""' <<<"$cfgj")
+    if [[ -n $atraw ]]; then
+      at=$(normalize_at "$atraw") || continue
+      target=$(date -d "today $at" +%s 2>/dev/null || echo "$now")
+      (( target <= now )) && target=$(date -d "tomorrow $at" +%s 2>/dev/null || echo "$now")
+      secs=$((target - now))
+    else
+      (( every > 0 )) || continue     # 0/absent interval = disabled, not "due"
+      last=$(jq -r --arg s "$s" '.last[$s] // 0' "$state")
+      target=$((last + every * 60))
+      secs=$((target - now)); (( secs < 0 )) && secs=0
+    fi
+    if (( secs < best_secs )); then best_secs=$secs; best_stream=$s; fi
+  done
+  (( best_secs == 2147483647 )) && best_secs=-1
+
+  jq -n --argjson cfg "$cfgj" --arg mode "$mode" \
+        --arg ns "$best_stream" --argjson nsecs "$best_secs" \
+        --argjson order "$(printf '%s\n' "${stream_order[@]}" | jq -R . | jq -sc .)" '
+    { mode: $mode,
+      reminders: $cfg.reminders,
+      sound: $cfg.sound,
+      next: { stream: $ns, secs: $nsecs },
+      streams: [ $order[] as $s |
+        { name: $s,
+          enabled: ($cfg.streams[$s].enabled // false),
+          every: ($cfg.streams[$s].every // null),
+          at: ($cfg.streams[$s].at // null) } ] }'
+}
+
+cmd_set() {
+  local path=$1 val=$2
+  [[ -n $path && -n $val ]] || { echo "usage: health-mode set <path> <value>" >&2; exit 2; }
+  local tmp; tmp=$(mktemp)
+  if [[ $val == true || $val == false ]] || [[ $val =~ ^-?[0-9]+$ ]]; then
+    jq --arg p "$path" --argjson v "$val" 'setpath($p | split("."); $v)' "$cfg" > "$tmp"
+  else
+    jq --arg p "$path" --arg v "$val" 'setpath($p | split("."); $v)' "$cfg" > "$tmp"
+  fi
+  mv "$tmp" "$cfg"
+}
+
+case "${1:-}" in
+  tick)    cmd_tick ;;
+  summary) cmd_summary ;;
+  set)     shift; cmd_set "$@" ;;
+  fire)    shift; fire "${1:-}" ;;
+  *) echo "usage: health-mode {tick|summary|set <path> <value>|fire <stream>}" >&2; exit 2 ;;
+esac
