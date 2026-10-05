@@ -8,6 +8,8 @@ needs a terminal.
 Self-contained: the reminder engine ships inside the plugin and the widget owns
 its own once-a-minute heartbeat. No systemd units, no external binaries.
 
+![Health Mode settings panel](screenshot.png)
+
 ## Install
 
 ```sh
