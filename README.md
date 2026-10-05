@@ -66,3 +66,7 @@ rm -rf ~/.config/health ~/.local/state/health
   minute, and `state.json` resumes the schedule on the next one.
 - With Omarchy "stay awake" enabled, idle suppression stops working, because
   that mode disables the shell's idle monitor.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
