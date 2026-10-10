@@ -22,6 +22,8 @@ stream_order=(eye move water breath meal winddown)
 mkdir -p "$cfg_dir" "$state_dir"
 [[ -f $cfg ]] || printf '%s\n' "$default_cfg" > "$cfg"
 [[ -f $state ]] || printf '%s\n' '{"last":{},"firedToday":{}}' > "$state"
+# Ensure state.json contains valid JSON (handles empty/corrupt files from prior runs)
+jq empty "$state" 2>/dev/null || printf '%s\n' '{"last":{},"firedToday":{}}' > "$state"
 
 # Config merged over defaults, so missing keys never break a caller.
 read_cfg() {
