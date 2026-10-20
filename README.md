@@ -28,7 +28,23 @@ Then click the heart in the bar. Manual install: clone this repo into
   Wind-down).
 - The glyph reflects state: heart-pulse (on) · dimmed (silent) · slashed heart
   (off). Hover shows the next nudge.
-- Reminders pause while the session is idle or locked.
+- Reminders pause while the session is idle or locked (details below).
+
+## Eye exercise (optional)
+
+An extra stream for a prescribed eye-exercise routine, such as the kind an
+eye-care professional may assign for convergence treatment. Health Mode only
+sends the reminder — it does not teach or prescribe any exercise; how to do the
+exercise and how often is up to you and your eye-care professional.
+
+- It is separate from the regular Eyes break reminder and is **off by default**.
+- When enabled it nudges every five hours (interval adjustable) with the
+  message: *"Do your 5-minute eye push-up exercise."*
+- Enable it in the settings panel, or from the CLI for a personal setup:
+
+```sh
+bash bin/health-mode set streams.eyeexercise.enabled true
+```
 
 ## Configuration
 
@@ -39,7 +55,8 @@ Kept outside the plugin so `omarchy plugin update` never touches it:
 - `~/.local/state/health/state.json` — runtime (`last`, `firedToday`)
 
 Both are created with defaults on first run. Default cadences: eyes 20 min,
-move 45 min, water 90 min, breathe 3 h, meal 14:00, wind-down 23:30.
+move 45 min, water 90 min, breathe 3 h, meal 14:00, wind-down 23:30,
+eye exercise off (5 h when on).
 
 The bundled engine is a plain CLI too:
 
@@ -66,6 +83,13 @@ rm -rf ~/.config/health ~/.local/state/health
 
 - The heartbeat runs only while the shell runs; a missed tick costs at most a
   minute, and `state.json` resumes the schedule on the next one.
+- **Idle and lock:** while the session is idle or locked nothing is sent, and a
+  clock reminder (Meal, Wind-down) due during that time is *not* counted as
+  delivered. When you return the same local day, a clock reminder that came due
+  while you were away fires once; one that came due on an earlier day stays
+  behind. Interval reminders never queue up: while you are away an overdue
+  timer is reset silently, so on return the countdown starts fresh from that
+  moment instead of bursting overdue nudges.
 - With Omarchy "stay awake" enabled, idle suppression stops working, because
   that mode disables the shell's idle monitor.
 

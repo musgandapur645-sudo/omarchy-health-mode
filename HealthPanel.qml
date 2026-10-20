@@ -38,6 +38,7 @@ Panel {
   function streamNice(name) {
     switch (name) {
       case "eye": return "Eyes"
+      case "eyeexercise": return "Eye exercise"
       case "move": return "Move"
       case "water": return "Water"
       case "breath": return "Breathe"
@@ -66,7 +67,7 @@ Panel {
 
   function sliderValue(s) { return s.at ? toMins(s.at) : (s.every || 20) }
   function sliderMin(s) { return s.at ? 0 : 5 }
-  function sliderMax(s) { return s.at ? 1425 : 240 }
+  function sliderMax(s) { return s.at ? 1425 : 300 }
   function sliderStep(s) { return s.at ? 15 : 5 }
   function cadenceLabel(s, v) {
     if (s.at) return minsToHM(v)

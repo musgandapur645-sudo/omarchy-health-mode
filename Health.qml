@@ -36,6 +36,7 @@ BarWidget {
   function streamNice(name) {
     switch (name) {
       case "eye": return "Eyes"
+      case "eyeexercise": return "Eye exercise"
       case "move": return "Move"
       case "water": return "Water"
       case "breath": return "Breathe"

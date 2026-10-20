@@ -16,8 +16,8 @@ state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/health"
 state="$state_dir/state.json"
 sound_file=/usr/share/sounds/freedesktop/stereo/message.oga
 
-default_cfg='{"reminders":true,"sound":true,"streams":{"eye":{"enabled":true,"every":20},"move":{"enabled":true,"every":45},"water":{"enabled":true,"every":90},"breath":{"enabled":true,"every":180},"meal":{"enabled":true,"at":"14:00"},"winddown":{"enabled":true,"at":"23:30"}}}'
-stream_order=(eye move water breath meal winddown)
+default_cfg='{"reminders":true,"sound":true,"streams":{"eye":{"enabled":true,"every":20},"eyeexercise":{"enabled":false,"every":300},"move":{"enabled":true,"every":45},"water":{"enabled":true,"every":90},"breath":{"enabled":true,"every":180},"meal":{"enabled":true,"at":"14:00"},"winddown":{"enabled":true,"at":"23:30"}}}'
+stream_order=(eye eyeexercise move water breath meal winddown)
 
 mkdir -p "$cfg_dir" "$state_dir"
 [[ -f $cfg ]] || printf '%s\n' "$default_cfg" > "$cfg"
@@ -68,6 +68,8 @@ fire() {
                     "Rest your eyes|Look far away for 20 seconds — let your focus muscles relax."
                     "Screen glare|Match monitor brightness to the room; avoid working in the dark."
                     "Blink|Blink fully a few times to re-wet your eyes.") ;;
+    eyeexercise) glyph=$(printf '\U000F0208') # nf-md-eye
+              msgs=("Eye exercise|Do your 5-minute eye push-up exercise.") ;;
     move)     glyph=$(printf '\U000F070E')   # nf-md-run
               msgs=("Stand up|Stretch, roll your shoulders, and walk for a minute."
                     "Posture check|Sit up, drop your shoulders, flex your wrists."
@@ -118,14 +120,19 @@ cmd_tick() {
       at=$(normalize_at "$atraw") || continue
       atMins=$(to_mins "$at")
       fired=$(jq -r --arg s "$s" '.firedToday[$s] // ""' "$state")
+      # Away: leave today's reminder pending and unmarked; catch up once on return.
+      [[ $away_now == 0 ]] || continue
       if (( nowmins >= atMins )) && [[ $fired != "$today" ]]; then
-        [[ $away_now == 1 ]] || fire "$s"
+        fire "$s"
         mark_today "$s" "$today"
       fi
     elif (( every > 0 )); then
       last=$(jq -r --arg s "$s" '.last[$s] // 0' "$state")
-      if (( now - last >= every * 60 )) && [[ $away_now == 0 ]]; then
-        fire "$s"
+      if (( last == 0 )); then
+        mark_last "$s" "$now"
+      elif (( now - last >= every * 60 )); then
+        # Away: silently reset the timer so the next interval counts from return.
+        [[ $away_now == 1 ]] || fire "$s"
         mark_last "$s" "$now"
       fi
     fi
